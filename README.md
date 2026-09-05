@@ -1,15 +1,17 @@
-# nodejs-hw — Express + MongoDB Notes API
+# nodejs-hw — Express + MongoDB Notes API with Auth
 
-An Express.js REST API for a notes collection, backed by MongoDB via Mongoose, with pagination, filtering, text search, and request validation via celebrate/Joi.
+An Express.js REST API for a per-user notes collection, backed by MongoDB via Mongoose, with cookie-based session authentication, pagination, filtering, text search, and request validation via celebrate/Joi.
 
 ## Stack
 
 - Express 5
 - Mongoose (MongoDB)
+- bcrypt (password hashing)
+- cookie-parser
 - celebrate + Joi (validation)
 - http-errors
 - dotenv (env vars)
-- cors
+- cors (with credentials support for cookies)
 - pino-http (request logging)
 - nodemon (dev reload)
 - ESLint (flat config)
@@ -19,22 +21,31 @@ An Express.js REST API for a notes collection, backed by MongoDB via Mongoose, w
 ```
 src/
 ├── constants/
-│   └── tags.js               # shared list of valid note tags
+│   ├── tags.js                # shared list of valid note tags
+│   └── time.js                # FIFTEEN_MINUTES, ONE_DAY (cookie maxAge)
 ├── controllers/
-│   └── notesController.js    # getAllNotes, getNoteById, createNote, updateNote, deleteNote
+│   ├── authController.js      # registerUser, loginUser, refreshUserSession, logoutUser
+│   └── notesController.js     # CRUD scoped to the authenticated user
 ├── db/
-│   └── connectMongoDB.js     # Mongoose connection (exits process on failure)
+│   └── connectMongoDB.js
 ├── middleware/
-│   ├── errorHandler.js       # global error handler (distinguishes HttpError vs generic errors)
-│   ├── logger.js             # pino-http request logger
-│   └── notFoundHandler.js    # 404 handler
+│   ├── authenticate.js        # protects all /notes routes via accessToken cookie
+│   ├── errorHandler.js
+│   ├── logger.js
+│   └── notFoundHandler.js
 ├── models/
-│   └── note.js                # Note Mongoose schema (tag is indexed)
+│   ├── note.js                 # now includes userId (ref User)
+│   ├── session.js
+│   └── user.js                 # hashes handled in controller; toJSON strips password
 ├── routes/
-│   └── notesRoutes.js        # /notes routes, wired with celebrate(schema) validation
+│   ├── authRoutes.js          # /auth/register, /auth/login, /auth/refresh, /auth/logout
+│   └── notesRoutes.js         # /notes routes, all behind authenticate + celebrate validation
+├── services/
+│   └── auth.js                 # createSession, setSessionCookies
 ├── validations/
-│   └── notesValidation.js    # getAllNotesSchema, noteIdSchema, createNoteSchema, updateNoteSchema
-└── server.js                  # app entry point
+│   ├── authValidation.js      # registerUserSchema, loginUserSchema
+│   └── notesValidation.js
+└── server.js
 ```
 
 ## Setup
@@ -48,32 +59,28 @@ src/
    PORT=3000
    MONGO_URL=your_mongodb_connection_string
    ```
-3. Run in dev mode (auto-restart on changes):
+3. Run in dev mode:
    ```
    npm run dev
    ```
-   Or in production mode:
-   ```
-   npm start
-   ```
 
-## Routes
+## Auth routes
 
-- `GET /notes?page=1&perPage=10&tag=Todo&search=hello` → `200`
-  ```json
-  { "page": 1, "perPage": 10, "totalNotes": 40, "totalPages": 4, "notes": [] }
-  ```
-- `GET /notes/:noteId` → `200`, single note, or `404 { "message": "Note not found" }`
-- `POST /notes` → `201`, created note (body: `title` required, `content`/`tag` optional)
-- `PATCH /notes/:noteId` → `200`, updated note (body must include at least one of `title`/`content`/`tag`), or `404`
-- `DELETE /notes/:noteId` → `200`, deleted note, or `404`
-- Any other route → `404 { "message": "Route not found" }`
-- Validation errors (celebrate/Joi) → `400` with details
-- Any other server-side error → `500` (or the status from `http-errors`) with `{ "message": "<error message>" }`
+- `POST /auth/register` — body: `{ email, password }` → `201`, created user (no password field)
+- `POST /auth/login` — body: `{ email, password }` → `200`, logged-in user
+- `POST /auth/refresh` — uses `sessionId`/`refreshToken` cookies → `200 { "message": "Session refreshed" }`
+- `POST /auth/logout` — uses `sessionId` cookie, clears all auth cookies → `204`
+
+All auth endpoints set three cookies (`accessToken`, `refreshToken`, `sessionId`) with `httpOnly: true, secure: true, sameSite: 'none'`.
+
+## Notes routes (all require a valid `accessToken` cookie)
+
+- `GET /notes?page=1&perPage=10&tag=Todo&search=hello` → notes belonging to the authenticated user only
+- `GET /notes/:noteId`, `POST /notes`, `PATCH /notes/:noteId`, `DELETE /notes/:noteId` — all scoped to the authenticated user; accessing another user's note returns `404 { "message": "Note not found" }`
 
 ## Deploying to Render
 
-1. Create a new Web Service on render.com pointing at this repo, branch `03-validation`
+1. Create a new Web Service on render.com pointing at this repo, branch `04-auth`
 2. Build command: `npm install`
 3. Start command: `npm start`
 4. Add environment variables `PORT` (optional) and `MONGO_URL` (required) in the Render dashboard's Environment tab
