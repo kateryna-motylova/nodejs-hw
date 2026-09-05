@@ -22,9 +22,10 @@ export const getAllNotes = async (req, res, next) => {
       });
     }
 
-    const totalNotes = await Note.countDocuments(notesQuery.getFilter());
-
-    const notes = await notesQuery.skip(skip).limit(Number(perPage));
+    const [notes, totalNotes] = await Promise.all([
+      notesQuery.skip(skip).limit(Number(perPage)),
+      Note.countDocuments(notesQuery.getFilter()),
+    ]);
 
     const totalPages = Math.ceil(totalNotes / perPage);
 
